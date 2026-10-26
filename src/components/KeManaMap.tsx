@@ -14,7 +14,7 @@ import {
   WAZE_MAP_STYLE,
 } from "@/lib/map-config";
 import { applyWazeMapTheme } from "@/lib/waze-map-theme";
-import { fuseHeading } from "@/lib/heading";
+import { bearingBetween, fuseHeading, normalizeHeading, shortestDelta } from "@/lib/heading";
 import { UserLocationArrow } from "./UserLocationArrow";
 import { CompassButton } from "./CompassButton";
 import { WazeMenu } from "./WazeMenu";
@@ -27,7 +27,7 @@ import type { SavedPlace, UserProfile, VehicleMode } from "@/lib/types";
 import { useSession } from "next-auth/react";
 import { useLocale } from "./LocaleProvider";
 import { ReportSheet } from "./ReportSheet";
-import { SearchBar } from "./SearchBar";
+import { SearchBar, type SearchDestination } from "./SearchBar";
 import { useSpeech } from "@/hooks/useSpeech";
 import { useDeviceHeading } from "@/hooks/useDeviceHeading";
 import { createActiveRoute } from "@/lib/navigation/session";
@@ -48,7 +48,7 @@ import {
   navStartedPhrase,
   reportAheadPhrase,
 } from "@/lib/navigation/voice-cues";
-import { nearestReportAhead, reportsAheadOnRoute } from "@/lib/navigation/report-alert";
+import { findEventsOnRoute, nearestReportAhead, reportsAheadOnRoute } from "@/lib/navigation/report-alert";
 import { JAM_FLOW_DASHES, jamFlowDashAt, routeTrafficGeoJson } from "@/lib/navigation/jam-segments";
 import {
   cameraCueBand,
@@ -173,7 +173,19 @@ export function KeManaMap() {
   const [navPaused, setNavPaused] = useState(false);
   const [navProgress, setNavProgress] = useState<RouteProgress | null>(null);
   const [mapBearing, setMapBearing] = useState(0);
+  const [headingMode, setHeadingMode] = useState<"follow" | "north">("follow");
   const [activeRoute, setActiveRoute] = useState<ActiveRoute | null>(null);
+  const [previewDest, setPreviewDest] = useState<SearchDestination | null>(null);
+  const [previewVehicle, setPreviewVehicle] = useState<VehicleMode>("car");
+  const [previewRoute, setPreviewRoute] = useState<{
+    route: ActiveRoute;
+    dest: SearchDestination;
+    vehicle: VehicleMode;
+    distanceKm: number;
+    durationMin: number;
+    events: { report: MapReport; distanceM: number }[];
+  } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const spokenCuesRef = useRef<Set<string>>(new Set());
   const hazardSpokenRef = useRef(new Map<string, number>());
   const cameraSpokenRef = useRef(new Map<string, number>());
@@ -395,13 +407,47 @@ export function KeManaMap() {
     return () => clearInterval(id);
   }, [refreshReports, navigating]);
 
+  // Real-time map rotation to follow device direction
+  useEffect(() => {
+    if (headingMode !== "follow" || !followUser || !mapRef.current) return;
+    const target = fusedHeading ?? deviceHeading;
+    if (target == null) return;
+    const current = mapRef.current.getBearing();
+    if (Math.abs(shortestDelta(current, target)) < 1.0) return;
+    if (userLocation) {
+      mapRef.current.easeTo({
+        center: [userLocation.lng, userLocation.lat],
+        bearing: target,
+        duration: 220,
+        easing: (t) => t,
+      });
+    } else {
+      mapRef.current.easeTo({
+        bearing: target,
+        duration: 220,
+        easing: (t) => t,
+      });
+    }
+  }, [fusedHeading, deviceHeading, headingMode, followUser, userLocation]);
+
+  // Position and camera updates as user travels
   useEffect(() => {
     if (!followUser || navPaused || !userLocation || !mapRef.current) return;
     const now = Date.now();
-    if (now - lastCameraFollowRef.current < 380) return;
+    if (now - lastCameraFollowRef.current < 300) return;
     lastCameraFollowRef.current = now;
-    driveView(mapRef.current, userLocation, fusedHeading);
-  }, [userLocation, followUser, fusedHeading, navPaused]);
+    const targetBearing =
+      headingMode === "follow"
+        ? (fusedHeading ?? deviceHeading ?? mapRef.current.getBearing())
+        : 0;
+    mapRef.current.easeTo({
+      center: [userLocation.lng, userLocation.lat],
+      zoom: MAP_ZOOM_DRIVING,
+      pitch: MAP_PITCH,
+      bearing: targetBearing,
+      duration: 380,
+    });
+  }, [userLocation, followUser, fusedHeading, deviceHeading, headingMode, navPaused]);
 
   const speedKmh = Math.max(0, Math.round((userLocation?.speedMps ?? 0) * 3.6));
   const liveEta = remainingEta(
@@ -457,12 +503,13 @@ export function KeManaMap() {
       : nearbyAlert
         ? `${t(locale, "hazardAhead")}: ${reportLabel(locale, nearbyAlert.r.type)} · ${Math.round(nearbyAlert.d * 1000)} m`
         : null;
+  const currentRoute = activeRoute ?? previewRoute?.route ?? null;
   const routeLine = useMemo(
     () =>
-      activeRoute && activeRoute.coordinates.length >= 2
-        ? routeTrafficGeoJson(activeRoute.coordinates, reports)
+      currentRoute && currentRoute.coordinates.length >= 2
+        ? routeTrafficGeoJson(currentRoute.coordinates, reports)
         : null,
-    [activeRoute, reports],
+    [currentRoute, reports],
   );
   const hasJam = !!routeLine?.features.some((f) => f.properties?.jam);
 
@@ -502,6 +549,8 @@ export function KeManaMap() {
     activeRouteRef.current = null;
     stopHitRef.current = null;
     setActiveRoute(null);
+    setPreviewRoute(null);
+    setPreviewDest(null);
     setRouteInfo(null);
     setRouting(false);
     setRouteSheetOpen(false);
@@ -588,6 +637,8 @@ export function KeManaMap() {
       setSearchOpen(false);
       setMenuOpen(false);
       setRouteSheetOpen(false);
+      setPreviewRoute(null);
+      setPreviewDest(null);
       if (opts.overview !== false) setFollowUser(false);
 
       const ctrl = new AbortController();
@@ -650,14 +701,29 @@ export function KeManaMap() {
         setNavProgress(computeRouteProgress(route, from));
         void refreshOsm();
 
-        if (opts.overview !== false) {
-          fitRouteOverview(coords);
-          window.setTimeout(() => {
-            setFollowUser(true);
-            if (mapRef.current && userLocation) {
-              driveView(mapRef.current, userLocation);
-            }
-          }, 1400);
+        // Automatically zoom directly into the vehicle / 3D cockpit driving view
+        setFollowUser(true);
+        if (mapRef.current) {
+          const targetCenter = userLocation ?? from;
+          const routeBearing =
+            coords.length >= 2
+              ? bearingBetween(
+                  { lat: coords[0][1], lng: coords[0][0] },
+                  { lat: coords[1][1], lng: coords[1][0] },
+                )
+              : 0;
+          const initialBearing =
+            headingMode === "follow"
+              ? (fusedHeading ?? deviceHeading ?? routeBearing)
+              : 0;
+          mapRef.current.flyTo({
+            center: [targetCenter.lng, targetCenter.lat],
+            zoom: MAP_ZOOM_DRIVING,
+            pitch: MAP_PITCH,
+            bearing: initialBearing,
+            duration: 1200,
+          });
+          setMapBearing(initialBearing);
         }
         if (opts.announceStart !== false) {
           speak(navStartedPhrase(locale, opts.to.label));
@@ -676,7 +742,9 @@ export function KeManaMap() {
       speak,
       requestLocation,
       requestCompassPermission,
-      fitRouteOverview,
+      headingMode,
+      fusedHeading,
+      deviceHeading,
       refreshOsm,
     ],
   );
@@ -697,6 +765,94 @@ export function KeManaMap() {
       });
     },
     [planAndFollow],
+  );
+
+  const loadRoutePreview = useCallback(
+    async (dest: SearchDestination | null, vehicleMode: VehicleMode = "car") => {
+      if (!dest) {
+        setPreviewDest(null);
+        setPreviewRoute(null);
+        setPreviewLoading(false);
+        return;
+      }
+      setPreviewDest(dest);
+      setPreviewVehicle(vehicleMode);
+      setPreviewLoading(true);
+      setFollowUser(false);
+
+      let from = userLocation;
+      if (!from && mapRef.current) {
+        const c = mapRef.current.getCenter();
+        from = { lat: c.lat, lng: c.lng, speedMps: 0 };
+      }
+      if (!from) from = await requestLocation();
+      if (!from) {
+        setToast(t(locale, "locationDenied"));
+        setPreviewLoading(false);
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({
+          fromLat: String(from.lat),
+          fromLng: String(from.lng),
+          toLat: String(dest.lat),
+          toLng: String(dest.lng),
+          vehicle: vehicleMode,
+          locale,
+        });
+        const res = await fetch(`/api/directions?${params}`, { cache: "no-store" });
+        if (!res.ok) {
+          setToast(t(locale, "routeFailed"));
+          setPreviewLoading(false);
+          return;
+        }
+        const data = (await res.json()) as {
+          route: {
+            coordinates: [number, number][];
+            distanceKm: number;
+            durationMin: number;
+            steps: ActiveRoute["steps"];
+          };
+          vehicle: VehicleMode;
+        };
+        const coords = data.route.coordinates ?? [];
+        if (coords.length < 2) {
+          setToast(t(locale, "routeFailed"));
+          setPreviewLoading(false);
+          return;
+        }
+
+        const route = createActiveRoute({
+          coordinates: coords,
+          destination: { lat: dest.lat, lng: dest.lng, label: dest.label },
+          stops: [],
+          vehicle: data.vehicle,
+          distanceKm: data.route.distanceKm,
+          durationMin: data.route.durationMin,
+          steps: data.route.steps ?? [],
+        });
+
+        const eventsOnTrip = findEventsOnRoute(from, coords, reports, 0.4);
+
+        setPreviewRoute({
+          route,
+          dest,
+          vehicle: data.vehicle,
+          distanceKm: data.route.distanceKm,
+          durationMin: data.route.durationMin,
+          events: eventsOnTrip,
+        });
+
+        // Smoothly fit the map camera to display the polyline from starting point to destination
+        fitRouteOverview(coords);
+      } catch {
+        setToast(t(locale, "routeFailed"));
+      } finally {
+        setPreviewLoading(false);
+      }
+    },
+    [userLocation, requestLocation, locale, reports, fitRouteOverview],
   );
 
   const addStop = useCallback(
@@ -972,14 +1128,54 @@ export function KeManaMap() {
       deviceHeading,
       lastHeading: lastHeadingRef.current,
     });
-    if (mapRef.current) driveView(mapRef.current, geo, heading);
-  }, [userLocation, requestLocation, requestCompassPermission, deviceHeading]);
+    const targetBearing = headingMode === "follow" ? (heading ?? 0) : 0;
+    if (mapRef.current) {
+      mapRef.current.easeTo({
+        center: [geo.lng, geo.lat],
+        zoom: MAP_ZOOM_DRIVING,
+        pitch: MAP_PITCH,
+        bearing: targetBearing,
+        duration: 480,
+      });
+      setMapBearing(targetBearing);
+    }
+  }, [userLocation, requestLocation, requestCompassPermission, deviceHeading, headingMode]);
 
-  const snapNorthUp = useCallback(() => {
-    setFollowUser(false);
-    mapRef.current?.easeTo({ bearing: 0, duration: 700 });
-    setMapBearing(0);
-  }, []);
+  const toggleCompassMode = useCallback(() => {
+    void requestCompassPermission();
+    const currentBearing = mapRef.current?.getBearing() ?? mapBearing;
+    const isRotatedOffNorth = Math.abs(normalizeHeading(currentBearing)) > 2.5;
+
+    if (headingMode === "follow") {
+      // Toggle to Always North (bearing 0)
+      setHeadingMode("north");
+      mapRef.current?.easeTo({ bearing: 0, duration: 550 });
+      setMapBearing(0);
+      setToast(t(locale, "compassNorthLocked"));
+    } else {
+      // In North mode (or free rotated)
+      if (isRotatedOffNorth) {
+        // If map was manually rotated away from 0, snap back to North first
+        mapRef.current?.easeTo({ bearing: 0, duration: 500 });
+        setMapBearing(0);
+        setHeadingMode("north");
+        setToast(t(locale, "compassNorthLocked"));
+      } else {
+        // Already North-up: toggle to follow device direction!
+        setHeadingMode("follow");
+        setFollowUser(true);
+        const target = fusedHeading ?? deviceHeading ?? currentBearing;
+        mapRef.current?.easeTo({
+          bearing: target,
+          center: userLocation ? [userLocation.lng, userLocation.lat] : undefined,
+          pitch: MAP_PITCH,
+          duration: 550,
+        });
+        setMapBearing(target);
+        setToast(t(locale, "compassFollow"));
+      }
+    }
+  }, [headingMode, mapBearing, fusedHeading, deviceHeading, userLocation, requestCompassPermission, locale]);
 
   const osmGeoJson = useMemo(
     () => ({
@@ -1016,7 +1212,10 @@ export function KeManaMap() {
         style={{ width: "100%", height: "100%" }}
         onClick={onMapClick}
         onDragStart={() => setFollowUser(false)}
-        onRotateStart={() => setFollowUser(false)}
+        onRotateStart={() => {
+          setFollowUser(false);
+          setHeadingMode("north");
+        }}
         interactiveLayerIds={showOsm ? OSM_LAYER_IDS : undefined}
         onLoad={(e) => {
           applyWazeMapTheme(e.target);
@@ -1031,6 +1230,21 @@ export function KeManaMap() {
         {userLocation && (
           <Marker longitude={userLocation.lng} latitude={userLocation.lat} anchor="center">
             <UserLocationArrow heading={fusedHeading} mapBearing={mapBearing} />
+          </Marker>
+        )}
+
+        {previewRoute && (
+          <Marker
+            longitude={previewRoute.dest.lng}
+            latitude={previewRoute.dest.lat}
+            anchor="bottom"
+          >
+            <div className="flex flex-col items-center drop-shadow-[0_4px_12px_rgba(0,0,0,0.6)]">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-white bg-[#e11d48] text-xl shadow-lg">
+                🏁
+              </div>
+              <div className="h-2 w-1 bg-white" />
+            </div>
           </Marker>
         )}
 
@@ -1301,12 +1515,13 @@ export function KeManaMap() {
             )}
             <CompassButton
               mapBearing={mapBearing}
-              trackingGps={followUser && fusedHeading != null}
-              onNorthUp={() => {
-                void requestCompassPermission();
-                snapNorthUp();
-              }}
-              label={t(locale, "northUp")}
+              mode={headingMode}
+              onToggle={toggleCompassMode}
+              label={
+                headingMode === "follow"
+                  ? t(locale, "compassFollow")
+                  : t(locale, "compassNorthLocked")
+              }
             />
           </div>
           <div className="pointer-events-auto flex flex-col gap-2.5">
@@ -1587,9 +1802,54 @@ export function KeManaMap() {
             <SearchBar
               locale={locale}
               expanded={searchOpen}
-              onExpandedChange={setSearchOpen}
+              onExpandedChange={(open) => {
+                setSearchOpen(open);
+                if (!open) {
+                  setPreviewRoute(null);
+                  setPreviewDest(null);
+                }
+              }}
               hasHome={!!profile?.home}
               hasWork={!!profile?.work}
+              origin={userLocation}
+              previewData={
+                previewRoute
+                  ? {
+                      distanceKm: previewRoute.distanceKm,
+                      durationMin: previewRoute.durationMin,
+                      vehicle: previewVehicle,
+                      loading: previewLoading,
+                      events: previewRoute.events,
+                    }
+                  : previewLoading
+                    ? {
+                        distanceKm: 0,
+                        durationMin: 0,
+                        vehicle: previewVehicle,
+                        loading: true,
+                        events: [],
+                      }
+                    : null
+              }
+              onSelectDestination={(dest) => {
+                if (dest) {
+                  void loadRoutePreview(dest, previewVehicle);
+                } else {
+                  setPreviewRoute(null);
+                  setPreviewDest(null);
+                }
+              }}
+              onVehicleChange={(v) => {
+                setPreviewVehicle(v);
+                if (previewDest) {
+                  void loadRoutePreview(previewDest, v);
+                }
+              }}
+              onCancelPreview={() => {
+                setPreviewRoute(null);
+                setPreviewDest(null);
+                setSearchOpen(false);
+              }}
               onHome={
                 profile?.home
                   ? () => {
@@ -1619,6 +1879,8 @@ export function KeManaMap() {
               }}
               onPrimeSpeech={prime}
               onNavigate={(dest, vehicle) => {
+                setPreviewRoute(null);
+                setPreviewDest(null);
                 startNavigation(
                   { lat: dest.lat, lng: dest.lng, label: dest.label },
                   vehicle,

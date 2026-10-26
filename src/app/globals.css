@@ -178,43 +178,65 @@ body {
 }
 
 .compass-btn {
+  position: relative;
   padding: 0;
-  background: #111820;
+  background: var(--km-glass);
+  backdrop-filter: blur(16px);
   overflow: visible;
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.compass-btn:hover {
+  transform: scale(1.05);
+}
+
+.compass-btn:active {
+  transform: scale(0.92);
 }
 
 .compass-btn-north {
-  border-color: rgba(225, 29, 72, 0.55);
-  box-shadow: 0 0 0 2px rgba(225, 29, 72, 0.18), var(--km-shadow);
-  animation: compass-north-pulse 1.8s var(--km-ease) infinite;
+  border-color: rgba(255, 59, 92, 0.75) !important;
+  box-shadow: 0 0 0 2px rgba(255, 59, 92, 0.22), 0 6px 20px rgba(255, 59, 92, 0.18), var(--km-shadow) !important;
 }
 
-.compass-btn-gps {
-  border-color: rgba(51, 209, 255, 0.5);
-  box-shadow: 0 0 0 2px rgba(51, 209, 255, 0.16), var(--km-shadow);
+.compass-btn-follow {
+  border-color: rgba(51, 209, 255, 0.85) !important;
+  box-shadow: 0 0 0 2.5px rgba(51, 209, 255, 0.28), 0 6px 24px rgba(51, 209, 255, 0.24), var(--km-shadow) !important;
 }
 
-.compass-snap .compass-ring {
-  animation: compass-snap-spin 0.52s var(--km-ease);
+.compass-btn-free {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.compass-snap-north .compass-ring {
+  animation: waze-compass-north-pop 0.52s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.compass-snap-follow .compass-ring {
+  animation: waze-compass-follow-pop 0.52s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .compass-ring {
   position: relative;
-  display: block;
-  height: 1.65rem;
-  width: 1.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.85rem;
+  width: 1.85rem;
   border-radius: 9999px;
   border: 1.5px solid #3a4452;
-  background: #1a222c;
+  background: radial-gradient(circle at center, #1e2836 0%, #111822 100%);
   transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .compass-btn-north .compass-ring {
-  border-color: #e11d48;
+  border-color: #ff3b5c;
+  background: radial-gradient(circle at center, #261922 0%, #151119 100%);
 }
 
-.compass-btn-gps .compass-ring {
+.compass-btn-follow .compass-ring {
   border-color: #33d1ff;
+  background: radial-gradient(circle at center, #112836 0%, #0d1a24 100%);
 }
 
 .compass-needle {
@@ -223,39 +245,85 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   transform-origin: center center;
   will-change: transform;
 }
 
 .compass-n {
   position: absolute;
-  top: -1px;
-  font-size: 0.55rem;
-  font-weight: 800;
-  color: #e11d48;
+  top: 1px;
+  font-size: 0.52rem;
+  font-weight: 900;
+  color: #ff3b5c;
   line-height: 1;
+  letter-spacing: -0.05em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  z-index: 5;
 }
 
 .compass-arrow {
   position: absolute;
-  top: 5px;
+  top: 7px;
   width: 0;
   height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-bottom: 9px solid #e11d48;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-bottom: 9px solid #ff3b5c;
+  filter: drop-shadow(0 1px 2px rgba(255, 59, 92, 0.4));
 }
 
 .compass-arrow::after {
   content: "";
   position: absolute;
   top: 9px;
-  left: -4px;
+  left: -3.5px;
   width: 0;
   height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 9px solid #d0d5dd;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 9px solid #cbd5e1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+}
+
+.compass-pivot {
+  position: absolute;
+  height: 3.5px;
+  width: 3.5px;
+  border-radius: 9999px;
+  background: #ffffff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+  z-index: 10;
+}
+
+.compass-mode-pill {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 1rem;
+  min-width: 1rem;
+  padding: 0 3px;
+  border-radius: 9999px;
+  font-size: 0.55rem;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  transition: all 0.25s ease;
+}
+
+.compass-mode-pill-north {
+  background: #ff3b5c;
+  color: #ffffff;
+}
+
+.compass-mode-pill-follow {
+  background: #33d1ff;
+  color: #061926;
 }
 
 .user-loc-halo {
@@ -318,6 +386,26 @@ body {
 
 .km-sheet-search {
   min-height: min(78dvh, 640px);
+}
+
+.km-sheet-search.km-sheet-preview {
+  min-height: auto !important;
+  max-height: min(62dvh, 540px) !important;
+  border-radius: 1.6rem 1.6rem 0 0;
+  box-shadow: 0 -10px 38px rgba(0, 0, 0, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 0;
+  background: #111823;
+  pointer-events: auto;
+}
+
+.km-overlay.km-overlay-preview {
+  pointer-events: none;
+}
+
+.km-overlay.km-overlay-preview .km-overlay-backdrop {
+  opacity: 0 !important;
+  pointer-events: none;
 }
 
 .km-sheet-report {
@@ -665,6 +753,39 @@ body {
   padding: 0.85rem;
   font-size: 0.85rem;
   font-weight: 700;
+  border: 1.5px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.nav-vehicle-btn.is-active {
+  background: #33d1ff !important;
+  color: #061926 !important;
+  border-color: rgba(255, 255, 255, 0.4) !important;
+  box-shadow: 0 4px 16px rgba(51, 209, 255, 0.35);
+}
+
+.btn-start-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, #10b981 0%, #059669 100%);
+  padding: 0.95rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #022c22;
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.btn-start-nav:hover {
+  filter: brightness(1.08);
+}
+
+.btn-start-nav:active {
+  transform: scale(0.98);
 }
 
 .nav-hud {
@@ -1143,6 +1264,37 @@ body {
   }
   100% {
     transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes waze-compass-north-pop {
+  0% {
+    transform: scale(0.85) rotate(-15deg);
+  }
+  45% {
+    transform: scale(1.18) rotate(8deg);
+  }
+  75% {
+    transform: scale(0.96) rotate(-2deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes waze-compass-follow-pop {
+  0% {
+    transform: scale(0.85);
+  }
+  40% {
+    transform: scale(1.22);
+    box-shadow: 0 0 0 8px rgba(51, 209, 255, 0.4), var(--km-shadow);
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
   }
 }
 

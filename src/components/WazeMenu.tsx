@@ -77,7 +77,7 @@ export function WazeMenu({
             <span className="km-menu-glyph">⚙</span>
             {t(locale, "settings")}
           </Link>
-          <a className="km-menu-row" href="mailto:hello@kemana.app">
+          <a className="km-menu-row" href="mailto:danielaniq@danielaniq.com">
             <span className="km-menu-glyph">?</span>
             {t(locale, "helpFeedback")}
           </a>

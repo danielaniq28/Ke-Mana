@@ -63,4 +63,27 @@ export function nearestReportAhead(
   return list.find((x) => x.distanceM >= minM) ?? list[0] ?? null;
 }
 
+export function findEventsOnRoute(
+  from: { lat: number; lng: number },
+  routeCoords: [number, number][],
+  reports: MapReport[],
+  maxCorridorKm = 0.35,
+): ReportAhead[] {
+  if (routeCoords.length < 2) return [];
+  const events: ReportAhead[] = [];
+  for (const report of reports) {
+    let minDist = Infinity;
+    for (const c of routeCoords) {
+      const d = haversineKm({ lat: report.lat, lng: report.lng }, { lat: c[1], lng: c[0] });
+      if (d < minDist) minDist = d;
+    }
+    if (minDist <= maxCorridorKm) {
+      const distanceM = Math.round(haversineKm(from, report) * 1000);
+      events.push({ report, distanceM });
+    }
+  }
+  events.sort((a, b) => a.distanceM - b.distanceM);
+  return events;
+}
+
 export { cameraCueBand };

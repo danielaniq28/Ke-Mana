@@ -8,6 +8,15 @@ export const metadata: Metadata = {
   description:
     "Lapor bahaya, polis, sekatan jalan dan lihat kamera laju serta ciri jalan dari OpenStreetMap.",
   applicationName: "Ke Mana",
+  icons: {
+    icon: "/icon.jpg",
+    apple: "/icon.jpg",
+  },
+  openGraph: {
+    title: "Ke Mana — Navigasi Komuniti Malaysia",
+    description:
+      "Lapor bahaya, polis, sekatan jalan dan lihat kamera laju serta ciri jalan dari OpenStreetMap.",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

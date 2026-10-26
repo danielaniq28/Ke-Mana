@@ -3,7 +3,7 @@ export function normalizeHeading(deg: number): number {
 }
 
 export function isValidHeading(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 360;
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 export function shortestDelta(from: number, to: number): number {

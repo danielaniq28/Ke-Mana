@@ -1,0 +1,7 @@
+{
+  "name": "Ke Mana — Navigasi Komuniti Malaysia",
+  "description": "Lapor bahaya, polis, sekatan jalan dan lihat kamera laju serta ciri jalan dari OpenStreetMap.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

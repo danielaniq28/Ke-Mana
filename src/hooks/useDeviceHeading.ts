@@ -53,10 +53,14 @@ export function useDeviceHeading() {
     }
     let gotAbsolute = false;
     const onOrient = (e: Event) => {
-      if (e.type === "deviceorientationabsolute") gotAbsolute = true;
-      else if (gotAbsolute) return;
       const h = headingFromEvent(e as DeviceOrientationEvent);
-      if (h != null) setHeading(h);
+      if (h == null) return;
+      if (e.type === "deviceorientationabsolute") {
+        gotAbsolute = true;
+        setHeading(h);
+      } else if (!gotAbsolute) {
+        setHeading(h);
+      }
     };
     handlerRef.current = onOrient;
     listeningRef.current = true;

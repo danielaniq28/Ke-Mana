@@ -14,7 +14,7 @@ export function UserLocationArrow({ heading, mapBearing = 0 }: Props) {
     <div className="relative flex h-[4.5rem] w-[4.5rem] items-center justify-center">
       <div className="user-loc-halo" />
       <div
-        className="relative z-10 drop-shadow-[0_3px_8px_rgba(0,80,160,0.35)]"
+        className="relative z-10 drop-shadow-[0_3px_8px_rgba(0,80,160,0.35)] transition-transform duration-200 ease-out"
         style={{ transform: `rotate(${relative}deg)` }}
       >
         <svg width="40" height="48" viewBox="0 0 40 48" fill="none" aria-hidden>

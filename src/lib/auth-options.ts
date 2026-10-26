@@ -21,7 +21,10 @@ export const authOptions: NextAuthOptions = {
   pages: {
     signIn: "/login",
   },
-  secret: process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET,
+  secret:
+    process.env.NEXTAUTH_SECRET ??
+    process.env.AUTH_SECRET ??
+    "ke-mana-jwt-auth-secret-fallback-key-2025",
   session: { strategy: "jwt" },
   callbacks: {
     async jwt({ token, user }) {
