@@ -32,10 +32,22 @@ function closestCoordIndex(
 
 export function isCameraAhead(
   from: { lat: number; lng: number },
-  camera: { lat: number; lng: number },
+  camera: { lat: number; lng: number; tags?: Record<string, string> },
   routeCoords?: [number, number][],
   heading?: number,
 ): boolean {
+  // If camera is directional (e.g. Northbound only on dual carriageway), verify driver direction
+  if (heading != null && camera.tags?.bearing) {
+    const camBearing = parseFloat(camera.tags.bearing);
+    if (Number.isFinite(camBearing)) {
+      const dir = camera.tags.direction;
+      const dirDelta = Math.abs(shortestDelta(heading, camBearing));
+      if (dir && dir !== "both" && dirDelta > 95) {
+        return false;
+      }
+    }
+  }
+
   if (routeCoords && routeCoords.length >= 2) {
     const ui = closestCoordIndex(routeCoords, from);
     const ci = closestCoordIndex(routeCoords, camera);

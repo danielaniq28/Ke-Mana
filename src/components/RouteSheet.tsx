@@ -28,7 +28,6 @@ type Props = {
 export function RouteSheet({
   locale,
   open,
-  paused,
   route,
   remainingMin,
   remainingKm,

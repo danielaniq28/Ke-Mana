@@ -14,7 +14,13 @@ import {
   WAZE_MAP_STYLE,
 } from "@/lib/map-config";
 import { applyWazeMapTheme } from "@/lib/waze-map-theme";
-import { bearingBetween, fuseHeading, normalizeHeading, shortestDelta } from "@/lib/heading";
+import {
+  bearingBetween,
+  fuseHeading,
+  normalizeHeading,
+  routeBearingAhead,
+  shortestDelta,
+} from "@/lib/heading";
 import { UserLocationArrow } from "./UserLocationArrow";
 import { CompassButton } from "./CompassButton";
 import { WazeMenu } from "./WazeMenu";
@@ -128,13 +134,14 @@ function driveView(
 }
 
 function boundsFromMap(map: MapRef) {
+  const center = map.getCenter();
   const b = map.getBounds();
-  return {
-    south: b.getSouth(),
-    west: b.getWest(),
-    north: b.getNorth(),
-    east: b.getEast(),
-  };
+  const maxSpan = 0.25;
+  const south = Math.max(b.getSouth(), center.lat - maxSpan);
+  const north = Math.min(b.getNorth(), center.lat + maxSpan);
+  const west = Math.max(b.getWest(), center.lng - maxSpan);
+  const east = Math.min(b.getEast(), center.lng + maxSpan);
+  return { south, west, north, east };
 }
 
 export function KeManaMap() {
@@ -407,47 +414,58 @@ export function KeManaMap() {
     return () => clearInterval(id);
   }, [refreshReports, navigating]);
 
-  // Real-time map rotation to follow device direction
+  // Camera orientation & position updates during live navigation and free-drive
   useEffect(() => {
-    if (headingMode !== "follow" || !followUser || !mapRef.current) return;
-    const target = fusedHeading ?? deviceHeading;
-    if (target == null) return;
-    const current = mapRef.current.getBearing();
-    if (Math.abs(shortestDelta(current, target)) < 1.0) return;
-    if (userLocation) {
-      mapRef.current.easeTo({
-        center: [userLocation.lng, userLocation.lat],
-        bearing: target,
-        duration: 220,
-        easing: (t) => t,
-      });
-    } else {
-      mapRef.current.easeTo({
-        bearing: target,
-        duration: 220,
-        easing: (t) => t,
-      });
-    }
-  }, [fusedHeading, deviceHeading, headingMode, followUser, userLocation]);
-
-  // Position and camera updates as user travels
-  useEffect(() => {
-    if (!followUser || navPaused || !userLocation || !mapRef.current) return;
+    if (!followUser || navPaused || !mapRef.current) return;
     const now = Date.now();
-    if (now - lastCameraFollowRef.current < 300) return;
+    if (now - lastCameraFollowRef.current < 200) return;
     lastCameraFollowRef.current = now;
-    const targetBearing =
-      headingMode === "follow"
-        ? (fusedHeading ?? deviceHeading ?? mapRef.current.getBearing())
-        : 0;
-    mapRef.current.easeTo({
-      center: [userLocation.lng, userLocation.lat],
-      zoom: MAP_ZOOM_DRIVING,
-      pitch: MAP_PITCH,
-      bearing: targetBearing,
-      duration: 380,
-    });
-  }, [userLocation, followUser, fusedHeading, deviceHeading, headingMode, navPaused]);
+    const map = mapRef.current;
+
+    let targetBearing: number;
+    if (headingMode === "north") {
+      targetBearing = 0;
+    } else if (activeRoute && userLocation) {
+      // Live navigation: continuously rotate to look ahead along the route
+      const ahead = routeBearingAhead(activeRoute.coordinates, userLocation, 35);
+      targetBearing = ahead ?? fusedHeading ?? deviceHeading ?? map.getBearing();
+    } else {
+      // Free driving / browsing
+      const target = fusedHeading ?? deviceHeading;
+      if (target == null && !userLocation) return;
+      targetBearing = target ?? map.getBearing();
+    }
+
+    if (userLocation) {
+      map.easeTo({
+        center: [userLocation.lng, userLocation.lat],
+        zoom: MAP_ZOOM_DRIVING,
+        pitch: MAP_PITCH,
+        bearing: targetBearing,
+        duration: 320,
+        easing: (t) => t,
+      });
+      setMapBearing(targetBearing);
+    } else if (headingMode === "follow") {
+      const current = map.getBearing();
+      if (Math.abs(shortestDelta(current, targetBearing)) >= 1.0) {
+        map.easeTo({
+          bearing: targetBearing,
+          duration: 250,
+          easing: (t) => t,
+        });
+        setMapBearing(targetBearing);
+      }
+    }
+  }, [
+    userLocation,
+    followUser,
+    activeRoute,
+    fusedHeading,
+    deviceHeading,
+    headingMode,
+    navPaused,
+  ]);
 
   const speedKmh = Math.max(0, Math.round((userLocation?.speedMps ?? 0) * 3.6));
   const liveEta = remainingEta(
@@ -703,19 +721,18 @@ export function KeManaMap() {
 
         // Automatically zoom directly into the vehicle / 3D cockpit driving view
         setFollowUser(true);
+        setHeadingMode("follow");
         if (mapRef.current) {
           const targetCenter = userLocation ?? from;
           const routeBearing =
-            coords.length >= 2
+            routeBearingAhead(coords, targetCenter, 30) ??
+            (coords.length >= 2
               ? bearingBetween(
                   { lat: coords[0][1], lng: coords[0][0] },
                   { lat: coords[1][1], lng: coords[1][0] },
                 )
-              : 0;
-          const initialBearing =
-            headingMode === "follow"
-              ? (fusedHeading ?? deviceHeading ?? routeBearing)
-              : 0;
+              : 0);
+          const initialBearing = routeBearing;
           mapRef.current.flyTo({
             center: [targetCenter.lng, targetCenter.lat],
             zoom: MAP_ZOOM_DRIVING,
@@ -742,9 +759,6 @@ export function KeManaMap() {
       speak,
       requestLocation,
       requestCompassPermission,
-      headingMode,
-      fusedHeading,
-      deviceHeading,
       refreshOsm,
     ],
   );
@@ -1128,7 +1142,8 @@ export function KeManaMap() {
       deviceHeading,
       lastHeading: lastHeadingRef.current,
     });
-    const targetBearing = headingMode === "follow" ? (heading ?? 0) : 0;
+    const routeAhead = activeRoute ? routeBearingAhead(activeRoute.coordinates, geo, 35) : undefined;
+    const targetBearing = headingMode === "follow" ? (routeAhead ?? heading ?? 0) : 0;
     if (mapRef.current) {
       mapRef.current.easeTo({
         center: [geo.lng, geo.lat],
@@ -1139,7 +1154,7 @@ export function KeManaMap() {
       });
       setMapBearing(targetBearing);
     }
-  }, [userLocation, requestLocation, requestCompassPermission, deviceHeading, headingMode]);
+  }, [userLocation, requestLocation, requestCompassPermission, deviceHeading, headingMode, activeRoute]);
 
   const toggleCompassMode = useCallback(() => {
     void requestCompassPermission();
@@ -1161,10 +1176,11 @@ export function KeManaMap() {
         setHeadingMode("north");
         setToast(t(locale, "compassNorthLocked"));
       } else {
-        // Already North-up: toggle to follow device direction!
+        // Already North-up: toggle to follow device direction or route ahead!
         setHeadingMode("follow");
         setFollowUser(true);
-        const target = fusedHeading ?? deviceHeading ?? currentBearing;
+        const routeAhead = activeRoute && userLocation ? routeBearingAhead(activeRoute.coordinates, userLocation, 35) : undefined;
+        const target = routeAhead ?? fusedHeading ?? deviceHeading ?? currentBearing;
         mapRef.current?.easeTo({
           bearing: target,
           center: userLocation ? [userLocation.lng, userLocation.lat] : undefined,
@@ -1175,7 +1191,7 @@ export function KeManaMap() {
         setToast(t(locale, "compassFollow"));
       }
     }
-  }, [headingMode, mapBearing, fusedHeading, deviceHeading, userLocation, requestCompassPermission, locale]);
+  }, [headingMode, mapBearing, fusedHeading, deviceHeading, userLocation, activeRoute, requestCompassPermission, locale]);
 
   const osmGeoJson = useMemo(
     () => ({
@@ -1229,7 +1245,13 @@ export function KeManaMap() {
       >
         {userLocation && (
           <Marker longitude={userLocation.lng} latitude={userLocation.lat} anchor="center">
-            <UserLocationArrow heading={fusedHeading} mapBearing={mapBearing} />
+            <UserLocationArrow
+              heading={
+                fusedHeading ??
+                (activeRoute ? routeBearingAhead(activeRoute.coordinates, userLocation, 30) : undefined)
+              }
+              mapBearing={mapBearing}
+            />
           </Marker>
         )}
 
@@ -1253,10 +1275,22 @@ export function KeManaMap() {
             <Layer
               id="osm-lights"
               type="circle"
-              minzoom={14}
+              minzoom={10}
               filter={["==", ["get", "kind"], "traffic_signals"]}
               paint={{
-                "circle-radius": ["interpolate", ["linear"], ["zoom"], 14, 4, 17, 7],
+                "circle-radius": [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  10,
+                  2.5,
+                  12,
+                  4,
+                  15,
+                  6,
+                  17,
+                  8,
+                ],
                 "circle-color": OSM_COLORS.traffic_signals,
                 "circle-stroke-width": 1.5,
                 "circle-stroke-color": "#fff",
@@ -1265,10 +1299,20 @@ export function KeManaMap() {
             <Layer
               id="osm-calming"
               type="circle"
-              minzoom={15}
+              minzoom={12}
               filter={["in", ["get", "kind"], ["literal", ["bump", "hump", "chicane"]]]}
               paint={{
-                "circle-radius": 5,
+                "circle-radius": [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  12,
+                  3,
+                  15,
+                  5,
+                  17,
+                  7,
+                ],
                 "circle-color": OSM_COLORS.bump,
                 "circle-stroke-width": 1.5,
                 "circle-stroke-color": "#fff",
@@ -1283,7 +1327,7 @@ export function KeManaMap() {
               key={f.id}
               longitude={f.lng}
               latitude={f.lat}
-              anchor="bottom"
+              anchor="center"
               onClick={(e) => {
                 e.originalEvent.stopPropagation();
                 setSelectedOsm(f);
@@ -1645,19 +1689,39 @@ export function KeManaMap() {
 
         {selectedOsm && (
           <div className="pointer-events-auto waze-card w-full max-w-lg p-4">
-            <div className="flex justify-between gap-2">
-              <div>
-                <p className="font-bold">
-                  {OSM_ICONS[selectedOsm.kind]} {osmLabel(locale, selectedOsm.kind)}
-                </p>
-                <p className="text-xs text-[#9aa3b2]">{t(locale, "mapData")}</p>
-                {selectedOsm.tags.maxspeed && (
-                  <p className="mt-1 text-sm font-medium">
-                    {t(locale, "maxSpeed")}: {selectedOsm.tags.maxspeed}
+            <div className="flex justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-bold text-base text-white">
+                    {OSM_ICONS[selectedOsm.kind]} {selectedOsm.tags.name || osmLabel(locale, selectedOsm.kind)}
+                  </p>
+                  {selectedOsm.tags.operator && (
+                    <span className="rounded-md bg-purple-950/80 px-2 py-0.5 text-xs font-semibold text-purple-300 border border-purple-800/60">
+                      {selectedOsm.tags.operator} AwAS
+                    </span>
+                  )}
+                </div>
+                {selectedOsm.tags.road_name && (
+                  <p className="text-xs text-[#9aa3b2] mt-0.5">
+                    {selectedOsm.tags.road_name} {selectedOsm.tags.km_marker ? `· ${selectedOsm.tags.km_marker}` : ""}
                   </p>
                 )}
+                {selectedOsm.tags.direction_label && (
+                  <p className="text-xs text-sky-400 mt-0.5">📌 {selectedOsm.tags.direction_label}</p>
+                )}
+                {selectedOsm.tags.maxspeed && (
+                  <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-rose-500/50 bg-rose-950/40 px-2.5 py-0.5 text-xs font-semibold text-rose-300">
+                    <span>⚡ {t(locale, "maxSpeed")}:</span>
+                    <span className="font-bold text-rose-200">{selectedOsm.tags.maxspeed}</span>
+                  </div>
+                )}
               </div>
-              <button type="button" className="text-[#8a94a3]" onClick={() => setSelectedOsm(null)}>
+              <button
+                type="button"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#2a3644] text-[#8a94a3] hover:text-white"
+                onClick={() => setSelectedOsm(null)}
+                aria-label="Close"
+              >
                 ✕
               </button>
             </div>
